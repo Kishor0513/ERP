@@ -37,3 +37,7 @@ Thumbs.db
 *.log
 logs/
 /tmp/
+
+# Laravel generated runtime artifacts
+/storage/framework/cache/*
+/storage/framework/views/*

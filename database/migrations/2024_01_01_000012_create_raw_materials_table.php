@@ -1,0 +1,28 @@
+<?php
+
+use Illuminate\Database\Migrations\Migration;
+use Illuminate\Database\Schema\Blueprint;
+use Illuminate\Support\Facades\Schema;
+
+return new class extends Migration
+{
+    public function up(): void
+    {
+        Schema::create('raw_materials', function (Blueprint $table) {
+            $table->id();
+            $table->string('name');
+            $table->string('sku')->unique();
+            $table->enum('unit', ['kg', 'grams', 'meters', 'pieces', 'liters']);
+            $table->text('description')->nullable();
+            $table->integer('reorder_point')->default(0);
+            $table->decimal('current_stock', 12, 4)->default(0);
+            $table->decimal('cost_per_unit', 12, 2);
+            $table->timestamps();
+        });
+    }
+
+    public function down(): void
+    {
+        Schema::dropIfExists('raw_materials');
+    }
+};

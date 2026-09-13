@@ -1,0 +1,231 @@
+services:
+  app:
+    build:
+      context: .
+      dockerfile: docker/app/Dockerfile
+    container_name: erp-app
+    restart: unless-stopped
+    working_dir: /var/www/html
+    volumes:
+      - .:/var/www/html
+      - app-storage:/var/www/html/storage
+      - app-vendor:/var/www/html/vendor
+    networks:
+      - erp-network
+    depends_on:
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      - PHP_OPCACHE_ENABLE=1
+    healthcheck:
+      test: ["CMD-SHELL", "php-fpm -t"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+  nginx:
+    build:
+      context: .
+      dockerfile: docker/nginx/Dockerfile
+    container_name: erp-nginx
+    restart: unless-stopped
+    ports:
+      - "8000:80"
+      - "443:443"
+    volumes:
+      - .:/var/www/html
+      - ./docker/nginx/default.conf:/etc/nginx/conf.d/default.conf:ro
+      - nginx-ssl:/etc/nginx/ssl:ro
+    networks:
+      - erp-network
+    depends_on:
+      app:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost/health || curl -f http://localhost/ || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
+
+  mysql:
+    image: mysql:8.0
+    container_name: erp-mysql
+    restart: unless-stopped
+    ports:
+      - "3306:3306"
+    volumes:
+      - mysql-data:/var/lib/mysql
+      - ./docker/mysql/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    environment:
+      MYSQL_ROOT_PASSWORD: ${DB_ROOT_PASSWORD:-secret_root_password}
+      MYSQL_DATABASE: ${DB_DATABASE:-erp}
+      MYSQL_USER: ${DB_USERNAME:-erp_user}
+      MYSQL_PASSWORD: ${DB_PASSWORD:-secret_password}
+    networks:
+      - erp-network
+    command:
+      - --default-authentication-plugin=mysql_native_password
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_unicode_ci
+      - --max-connections=100
+      - --innodb-buffer-pool-size=256M
+    healthcheck:
+      test: ["CMD-SHELL", "mysqladmin ping -h localhost -u root -p$${MYSQL_ROOT_PASSWORD}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+  redis:
+    image: redis:7-alpine
+    container_name: erp-redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+    command: redis-server --appendonly yes --maxmemory 256mb --maxmemory-policy allkeys-lru
+    networks:
+      - erp-network
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  meilisearch:
+    image: getmeili/meilisearch:v1.7
+    container_name: erp-meilisearch
+    restart: unless-stopped
+    ports:
+      - "7700:7700"
+    volumes:
+      - meilisearch-data:/meili_data
+    environment:
+      - MEILI_MASTER_KEY=${MEILISEARCH_KEY:-your_meilisearch_master_key}
+      - MEILI_ENV=production
+    networks:
+      - erp-network
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--spider", "http://localhost:7700/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
+
+  queue-worker:
+    build:
+      context: .
+      dockerfile: docker/queue/Dockerfile
+    container_name: erp-queue-worker
+    restart: unless-stopped
+    working_dir: /var/www/html
+    volumes:
+      - .:/var/www/html
+      - app-storage:/var/www/html/storage
+      - app-vendor:/var/www/html/vendor
+    networks:
+      - erp-network
+    depends_on:
+      app:
+        condition: service_healthy
+    environment:
+      - QUEUE_CONNECTION=redis
+    healthcheck:
+      test: ["CMD-SHELL", "ps aux | grep -v grep | grep -q 'queue:work' || exit 1"]
+      interval: 60s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+  scheduler:
+    build:
+      context: .
+      dockerfile: docker/scheduler/Dockerfile
+    container_name: erp-scheduler
+    restart: unless-stopped
+    working_dir: /var/www/html
+    volumes:
+      - .:/var/www/html
+      - app-storage:/var/www/html/storage
+      - app-vendor:/var/www/html/vendor
+    networks:
+      - erp-network
+    depends_on:
+      app:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "ps aux | grep -v grep | grep -q cron || exit 1"]
+      interval: 60s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+  mailpit:
+    image: axllent/mailpit
+    container_name: erp-mailpit
+    restart: unless-stopped
+    ports:
+      - "1025:1025"
+      - "8025:8025"
+    networks:
+      - erp-network
+
+  vite:
+    build:
+      context: .
+      dockerfile: docker/node/Dockerfile
+      target: build
+    container_name: erp-vite
+    working_dir: /app
+    command: npm run dev -- --host 0.0.0.0 --port 5173
+    ports:
+      - "5173:5173"
+    volumes:
+      - ./frontend:/app
+      - node-modules:/app/node_modules
+    networks:
+      - erp-network
+    environment:
+      - NODE_ENV=development
+
+  node:
+    build:
+      context: .
+      dockerfile: docker/node/Dockerfile
+      target: build
+    container_name: erp-node
+    working_dir: /app
+    volumes:
+      - ./frontend:/app
+      - node-modules:/app/node_modules
+    networks:
+      - erp-network
+    environment:
+      - NODE_ENV=production
+
+volumes:
+  app-storage:
+    driver: local
+  app-vendor:
+    driver: local
+  mysql-data:
+    driver: local
+  redis-data:
+    driver: local
+  meilisearch-data:
+    driver: local
+  nginx-ssl:
+    driver: local
+  node-modules:
+    driver: local
+
+networks:
+  erp-network:
+    driver: bridge
+    name: erp-network
